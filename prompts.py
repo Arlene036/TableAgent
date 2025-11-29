@@ -2,14 +2,16 @@
 Prompts Module for Table Analysis Agent
 Contains system prompts and prompt templates for different agent modes.
 """
-
+GENERAL_SYSTEM_PROMPT = """
+You are a helpful assistant that can answer questions and help with tasks.
+"""
 # system prompt for agent out of max iteration
 DIRECT_SYSTEM_PROMPT = """
 Given the communication history, directly output the answer.
 """
 
 # Main system prompt for the table analysis agent
-MAIN_SYSTEM_PROMPT = f"""You are an intelligent Table Analysis Agent specialized in understanding and analyzing complex tables. You have two primary modes of operation:
+MAIN_SYSTEM_PROMPT = """You are an intelligent Table Analysis Agent specialized in understanding and analyzing complex tables. You have two primary modes of operation:
 
 ## Mode 1: Table Structure Understanding (Agent0)
 When the user asks about table structure, format, merged cells, headers, or layout, you analyze the table's structural properties.

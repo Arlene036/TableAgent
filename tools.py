@@ -35,9 +35,59 @@ class TableStructure:
 # Agent 0: Table Structure Understanding Tools
 # =============================================================================
 def parse_table2df(table_input: str):
-    # TODO
-    return None
-    
+    """
+    Convert raw table text (HTML, Markdown, Plain text) into pandas DataFrame.
+    Supports:
+        - HTML tables (<table>...</table>)
+        - Markdown tables (| --- | --- |)
+        - Plain text tables (whitespace / tab separated)
+    """
+    import pandas as pd
+    import re
+    from io import StringIO
+
+    # 1. Try HTML first — pandas.read_html is very reliable
+    if "<table" in table_input.lower():
+        try:
+            dfs = pd.read_html(table_input)
+            return dfs[0]
+        except Exception:
+            pass
+
+    # 2. Try Markdown ─ detect "| header |" and "---"
+    if "|" in table_input and "---" in table_input:
+        try:
+            # Normalize markdown table
+            md = "\n".join([line for line in table_input.split("\n") if "|" in line])
+            df = pd.read_csv(StringIO(md), sep="|", engine="python")
+            df = df.dropna(axis=1, how="all")  # drop empty boundary columns
+            df = df.applymap(lambda x: str(x).strip() if not pd.isna(x) else x)
+            return df
+        except Exception:
+            pass
+
+    # 3. Plain text — split by tabs or >=2 spaces
+    lines = [line.strip() for line in table_input.split("\n") if line.strip()]
+    if len(lines) > 1:
+        try:
+            rows = []
+            for line in lines:
+                parts = re.split(r"\t+|\s{2,}", line)
+                rows.append(parts)
+            max_len = max(len(r) for r in rows)
+
+            # pad uneven rows
+            rows = [r + [""]*(max_len-len(r)) for r in rows]
+
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+            df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            return df
+        except Exception:
+            pass
+
+    # 4. Fallback — return single column DataFrame
+    return pd.DataFrame({"value": table_input.split("\n")})
+
 def parse_table_structure(table_input: str, format_type: str = "auto") -> Dict[str, Any]:
     """
     Parse raw table into standardized structure.
@@ -273,8 +323,7 @@ def get_cell_value(df: pd.DataFrame, row_label: str, col_name: str) -> Optional[
 
 
 def get_json_value(json_tree: Dict[str, Any], 
-                   row_key: str, 
-                   col_key: str) -> Optional[str]:
+                   keys: List[str]) -> Optional[str]:
     """
     Get value from JSON tree by row key and column key.
     
@@ -286,17 +335,13 @@ def get_json_value(json_tree: Dict[str, Any],
     Returns:
         Value or None if not found
     """
-    data = json_tree.get("data", {})
-    
-    # Find matching row
-    for key in data:
-        if row_key in key or key in row_key:
-            row_data = data[key]
-            # Find matching column
-            for col, val in row_data.items():
-                if col_key in col:
-                    return val
-    return None
+    result = json_tree
+    for key in keys:
+        try:
+            result = result[key]
+        except:
+            return result
+    return result
 
 
 def count_rows_with_condition(df: pd.DataFrame, 
@@ -383,58 +428,48 @@ def get_column_values(df: pd.DataFrame, column_pattern: str) -> List[Dict[str, s
 
 TOOL_REGISTRY = {
     # Structure Understanding Tools
-    "parse_table_structure": {
-        "func": parse_table_structure,
-        "description": "Parse raw table (HTML/markdown/plain) into standardized structure with cells, dimensions, and merged cell info",
-        "params": ["table_input", "format_type"]
-    },
     "detect_merged_cells": {
         "func": detect_merged_cells,
         "description": "Detect all merged cells in a parsed table structure",
-        "params": ["table_structure"]
+        "params": []
     },
     "table_size_detector": {
         "func": table_size_detector,
         "description": "Get table dimensions and valid data region bounding box",
-        "params": ["table_structure"]
+        "params": []
     },
     # Analysis Tools
     "get_cell_value": {
         "func": get_cell_value,
         "description": "Get specific cell value from DataFrame by row label and column name",
-        "params": ["df", "row_label", "col_name"]
+        "params": ["row_label", "col_name"]
     },
     "get_json_value": {
         "func": get_json_value,
         "description": "Get value from JSON tree by row key and column key",
-        "params": ["json_tree", "row_key", "col_key"]
+        "params": ["row_key", "col_key"]
     },
     "count_rows_with_condition": {
         "func": count_rows_with_condition,
         "description": "Count rows matching condition in specified column(s)",
-        "params": ["df", "column_pattern", "condition"]
+        "params": ["column_pattern", "condition"]
     },
     "get_column_values": {
         "func": get_column_values,
         "description": "Get all values from columns matching a pattern",
-        "params": ["df", "column_pattern"]
-    },
-    "classify_query": {
-        "func": classify_query,
-        "description": "Classify query as structure understanding or analysis task",
-        "params": ["query"]
+        "params": ["column_pattern"]
     }
 }
 
 
 def execute_tool(tool_name: str, table, **kwargs) -> Any:
-    """Execute a tool by name with given arguments."""
+    # table: either table_structure or df or json
     if tool_name not in TOOL_REGISTRY:
         return {"error": f"Unknown tool: {tool_name}"}
     
     tool = TOOL_REGISTRY[tool_name]
     try:
-        result = tool["func"](**kwargs) # TODO, add table
+        result = tool["func"](table, **kwargs)
         return result
     except Exception as e:
         return {"error": f"Tool execution error: {str(e)}"}
