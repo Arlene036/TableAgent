@@ -61,7 +61,7 @@ def parse_table2df(table_input: str):
             md = "\n".join([line for line in table_input.split("\n") if "|" in line])
             df = pd.read_csv(StringIO(md), sep="|", engine="python")
             df = df.dropna(axis=1, how="all")  # drop empty boundary columns
-            df = df.applymap(lambda x: str(x).strip() if not pd.isna(x) else x)
+            df = df.map(lambda x: str(x).strip() if not pd.isna(x) else x)
             return df
         except Exception:
             pass

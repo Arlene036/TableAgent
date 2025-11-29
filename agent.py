@@ -21,6 +21,8 @@ from tools import (
 )
 from prompts import (
     MAIN_SYSTEM_PROMPT,
+    STRUCTURE_SYSTEM_PROMPT,
+    ANALYSIS_SYSTEM_PROMPT,
     DIRECT_SYSTEM_PROMPT,
     CLASSIFICATION_PROMPT,
     TABLE_PARSING_PROMPT,
@@ -63,25 +65,17 @@ class ReActAgent:
         self,
         tools: List[str],
         llm_engine = QwenWrapper(),
+        mode: str = 'structure',
         direct_system_prompt = DIRECT_SYSTEM_PROMPT,
         max_iterations: int = 6,
         verbose: bool = True,
         memory_verbose: bool = False,
     ):
         self.history = []   
+        self.set_react_system_prompt(mode=mode, tools=tools)
 
-        available_tools = {}
-        for tool in tools:
-            tool_info = TOOL_REGISTRY[tool].copy()  # shallow copy
-            if "func" in tool_info:
-                del tool_info["func"]
-            available_tools[tool] = tool_info
-        tools_str = json.dumps(available_tools, indent=2)
-
-        self.react_system_prompt = MAIN_SYSTEM_PROMPT.format(tools=tools_str)
-
-        print('>>> self.react_system_prompt >>>')
-        print(self.react_system_prompt)
+        # print('>>> self.react_system_prompt >>>')
+        # print(self.react_system_prompt)
 
         self.direct_system_prompt = direct_system_prompt
         self.max_iterations = max_iterations
@@ -89,6 +83,19 @@ class ReActAgent:
         self.memory_verbose = memory_verbose
         self.tools = tools
         self.llm_engine = llm_engine
+
+    def set_react_system_prompt(self, mode: str, tools: List[str]):
+        available_tools = {}
+        for tool in tools:
+            tool_info = TOOL_REGISTRY[tool].copy()  # shallow copy
+            if "func" in tool_info:
+                del tool_info["func"]
+            available_tools[tool] = tool_info
+        tools_str = json.dumps(available_tools, indent=2)
+        if mode == 'structure':
+            self.react_system_prompt = STRUCTURE_SYSTEM_PROMPT.format(tools=tools_str)
+        else:
+            self.react_system_prompt = ANALYSIS_SYSTEM_PROMPT.format(tools=tools_str)
 
     def _log(self, message: str):
         if self.verbose:
@@ -103,24 +110,34 @@ class ReActAgent:
             return json_full['data']
 
     def tool_parsed(self, respond: str):
-        """
-        Parse tool invocation from LLM output.
-        Expected format:
-        Action: tool_name
-        Action Input: { ... json ... }
-        """
-        # Extract Action:
+        # Parse tool name
         try:
             action_line = re.search(r"Action\s*:\s*([a-zA-Z0-9_]+)", respond)
             tool_name = action_line.group(1).strip()
         except:
             raise ValueError(f"❌ Cannot parse tool name from respond: {respond}")
 
-        # Extract Action Input:
-        try:
-            input_json = re.search(r"Action Input\s*:\s*(\{.*?\})", respond, re.S).group(1)
-            kwargs = json.loads(input_json)
-        except:
+        # Try parsing the standard "Action Input: { ... }"
+        kwargs = None
+        match = re.search(r"Action Input\s*:\s*(\{.*?\})", respond, re.S)
+        if match:
+            try:
+                kwargs = json.loads(match.group(1))
+            except:
+                kwargs = None
+
+        # If still None, try parsing a bare `{ ... }` block after the action line
+        if kwargs is None:
+            # Find the first JSON block
+            match = re.search(r"Action\s*:.*?(\{.*?\})", respond, re.S)
+            if match:
+                try:
+                    kwargs = json.loads(match.group(1))
+                except:
+                    kwargs = {}
+
+        # Final fallback
+        if kwargs is None:
             kwargs = {}
 
         print(">>> tool_parsed INPUT>>>")
@@ -137,7 +154,7 @@ class ReActAgent:
     
 
 class StructureAgent(ReActAgent):
-    def __init__(self, llm_engine, verbose=True):
+    def __init__(self, llm_engine, verbose=True, mode: str = 'structure'):
         tools = [
             "detect_merged_cells",
             "table_size_detector",
@@ -145,8 +162,10 @@ class StructureAgent(ReActAgent):
         super().__init__(
             tools=tools,
             verbose=verbose,
-            llm_engine = llm_engine
+            llm_engine = llm_engine,
+            mode=mode,
         )
+
     def run(self, table:str, query: str) -> str:
         self._log(f"[StructureAgent] 开始处理查询: {query[:50]}...")
         self.table_structure = parse_table_structure(table)
@@ -174,13 +193,16 @@ class StructureAgent(ReActAgent):
                 self.history.append(
                     "Observation: " + str(tool_return)
                 )
+                self._log(f"[StructureAgent] 工具名称: {tool_name}")
+                self._log(f"[StructureAgent] 工具参数: {kwargs}")
+                self._log(f"[StructureAgent] 工具返回: {tool_return}")
         # if outreach max_iterations
         self._log(f"[StructureAgent] 达到最大迭代次数")
         respond = self.llm_engine.call(system_prompt=self.direct_system_prompt, user_prompt='\n'.join(self.history))
         return respond
 
 class AnalysisAgent(ReActAgent):
-    def __init__(self, llm_engine, verbose=True):
+    def __init__(self, llm_engine, verbose=True, mode: str = 'analysis'):
         tools = [
             # "parse_to_dataframe",
             # "parse_to_json_tree",
@@ -192,7 +214,8 @@ class AnalysisAgent(ReActAgent):
         super().__init__(
             tools=tools,
             verbose=verbose,
-            llm_engine = llm_engine
+            llm_engine = llm_engine,
+            mode=mode,
         )
 
     def run(self, table:str, query: str) -> str:
@@ -222,6 +245,9 @@ class AnalysisAgent(ReActAgent):
                 self.history.append(
                     "Observation: " + str(tool_return)
                 )
+                self._log(f"[AnalysisAgent] 工具名称: {tool_name}")
+                self._log(f"[AnalysisAgent] 工具参数: {kwargs}")
+                self._log(f"[AnalysisAgent] 工具返回: {tool_return}")
         # if outreach max_iterations
         self._log(f"[AnalysisAgent] 达到最大迭代次数")
         respond = self.llm_engine.call(system_prompt=self.direct_system_prompt, user_prompt='\n'.join(self.history))
@@ -250,7 +276,7 @@ class TableAnalysisAgent:
         query_type = self.llm.call(system_prompt=GENERAL_SYSTEM_PROMPT, user_prompt=CLASSIFICATION_PROMPT.format(query=query))
         self._log(f"[TableAnalysisAgent] 查询类型: {query_type[:50]}...")
 
-        if "structure" in query_type:
+        if "structure" in query_type[:20]:
             self._log(f"[TableAnalysisAgent] 使用StructureAgent")
             agent = StructureAgent(llm_engine = self.llm, verbose=self.verbose)
             return agent.run(table_input, query)
