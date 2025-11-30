@@ -36,6 +36,96 @@ class TableStructure:
 # =============================================================================
 def parse_table2df(table_input: str):
     """
+    Return DataFrame where:
+    - first column = row label (e.g., 固定资产、货币资金)
+    - remaining columns = values (e.g., 2024E, 2025E)
+    Fully compatible with get_cell_value().
+    """
+    import pandas as pd
+    import re
+    from io import StringIO
+
+    text = table_input.strip()
+    lower = text.lower()
+    def fix_col_name(x):
+        s = str(x).strip()
+        if s.endswith('.0') and s[:-2].replace('-', '').isdigit():
+            return s[:-2]
+        return s
+    # ================================
+    # 1. HTML proper table extraction
+    # ================================
+    if "<table" in lower:
+        try:
+            m = re.search(r"<table.*?</table>", text, flags=re.I | re.S)
+            html_table = m.group(0) if m else text
+            df = pd.read_html(html_table)[0]
+
+           
+            df = df.applymap(lambda x: str(x).strip() if not pd.isna(x) else x)
+
+            header = df.iloc[0].astype(str).str.strip()
+            df.columns = header
+            df = df[1:].reset_index(drop=True)
+
+            # 🚨 Critical: guaranteed first column is row_label
+            first_col = df.columns[0]
+            df[first_col] = df[first_col].astype(str).str.strip()
+            # Clean columns
+            df.columns = df.columns.map(fix_col_name)
+            return df
+
+        except Exception as e:
+            print("HTML parse error:", e)
+
+    # ================================
+    # 2. Markdown
+    # ================================
+    if "|" in text and "---" in text:
+        try:
+            md_lines = [line for line in text.split("\n") if "|" in line]
+            df = pd.read_csv(StringIO("\n".join(md_lines)), sep="|", engine="python")
+            df = df.dropna(axis=1, how="all")
+            df = df.applymap(lambda x: str(x).strip())
+
+        
+            header = df.iloc[0].astype(str).str.strip()
+            df.columns = header
+            df = df[1:].reset_index(drop=True)
+
+            # 🔥 Keep first column as row_label
+            df[df.columns[0]] = df[df.columns[0]].astype(str).str.strip()
+            df.columns = df.columns.map(fix_col_name)
+            return df
+        except:
+            pass
+
+    # ================================
+    # 3. Plain text
+    # ================================
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) > 1:
+        try:
+            rows = [re.split(r"\t+|\s{2,}", ln) for ln in lines]
+            max_len = max(len(r) for r in rows)
+            rows = [r + [""]*(max_len-len(r)) for r in rows]
+
+            df = pd.DataFrame(rows)
+            df.columns = df.iloc[0].astype(str).str.strip()
+            df = df[1:].reset_index(drop=True)
+
+            # 🔥 Clean first column as row_label
+            df[df.columns[0]] = df[df.columns[0]].astype(str).str.strip()
+
+            return df
+        except:
+            pass
+
+    # fallback
+    return pd.DataFrame({"value": text.split("\n")})
+
+def parse_table2df_old(table_input: str):
+    """
     Convert raw table text (HTML, Markdown, Plain text) into pandas DataFrame.
     Supports:
         - HTML tables (<table>...</table>)
@@ -49,8 +139,9 @@ def parse_table2df(table_input: str):
     # 1. Try HTML first — pandas.read_html is very reliable
     if "<table" in table_input.lower():
         try:
-            dfs = pd.read_html(table_input)
-            return dfs[0]
+            df = pd.read_html(table_input)
+            df.columns = df.columns.map(str).str.strip()
+            return df
         except Exception:
             pass
 
@@ -303,26 +394,25 @@ def table_size_detector(table_structure: Dict[str, Any]) -> Dict[str, Any]:
 def get_cell_value(df: pd.DataFrame, row_label: str, col_name: str) -> Optional[str]:
     """
     Get value from DataFrame by row label (first column value) and column name.
-    
-    Args:
-        df: pandas DataFrame
-        row_label: Value to match in first column
-        col_name: Column name to retrieve
-    
-    Returns:
-        Cell value or None if not found
     """
     try:
+        df = df.copy()
+        df.columns = df.columns.map(str)
+
         first_col = df.columns[0]
+
         mask = df[first_col].astype(str).str.strip() == row_label.strip()
         if mask.any():
-            # Find the best matching column
+
             matching_cols = [c for c in df.columns if col_name in c]
             if matching_cols:
                 return str(df.loc[mask, matching_cols[0]].iloc[0])
-            elif col_name in df.columns:
+
+            if col_name in df.columns:
                 return str(df.loc[mask, col_name].iloc[0])
+
         return None
+
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -334,8 +424,6 @@ def get_json_value(json_tree: Dict[str, Any],
     
     Args:
         json_tree: JSON tree from parse_to_json_tree
-        row_key: Row key (e.g., "管理人员")
-        col_key: Column key (partial match supported)
     
     Returns:
         Value or None if not found
@@ -348,15 +436,15 @@ def get_json_value(json_tree: Dict[str, Any],
             return result
     return result
  
-def query_table_sql(df, q):
+def query_table_sql(df, query):
     import duckdb
     try:
         con = duckdb.connect()
         con.register("df", df)      
-        res = con.execute(q).df()  
+        res = con.execute(query).df()  
         return res.to_dict('records')
     except Exception as e:
-        return {"error": str(e), "query": q}
+        return {"error": str(e), "query": query}
 
 def get_column_values(df: pd.DataFrame, column_pattern: str) -> List[Dict[str, str]]:
     """
@@ -403,13 +491,13 @@ TOOL_REGISTRY = {
     # Analysis Tools
     "get_cell_value": {
         "func": get_cell_value,
-        "description": "Get specific cell value from DataFrame by row label and column name",
+        "description": "Get specific cell value from DataFrame by row label and column name. Use this tool only if the table type is 'dataframe'",
         "params": ["row_label", "col_name"]
     },
     "get_json_value": {
         "func": get_json_value,
-        "description": "Get value from JSON tree by row key and column key",
-        "params": ["row_key", "col_key"]
+        "description": "Get value from JSON tree by keys (list of string). Use this tool only if the table type is 'json'",
+        "params": ["keys"]
     },
     "query_table_sql": {
         "func": query_table_sql,
@@ -430,8 +518,5 @@ def execute_tool(tool_name: str, table, **kwargs) -> Any:
         return {"error": f"Unknown tool: {tool_name}"}
     
     tool = TOOL_REGISTRY[tool_name]
-    try:
-        result = tool["func"](table, **kwargs)
-        return result
-    except Exception as e:
-        return {"error": f"Tool execution error: {str(e)}"}
+    result = tool["func"](table, **kwargs)
+    return result

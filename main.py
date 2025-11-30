@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 INPUT_PATH = "/Users/yaqi/cmu/course/11667/TableEval-test.jsonl"
-OUTPUT_PATH = "/Users/yaqi/cmu/course/11667/TableEval-results-2040-2326.jsonl"
+OUTPUT_PATH = "/Users/yaqi/cmu/course/11667/TableEval-results-79-2040.jsonl" # 
 MAX_SAMPLE = 1
 TYPE = 'openai'
 
@@ -192,4 +192,4 @@ if __name__ == "__main__":
     # run_agent_on_dataset()
     # run_agent_on_last_samples()
     # run_agent_by_subtask()
-    run_agent_on_indices(range(2040, 2326))
+    run_agent_on_indices( range(79, 2040))
