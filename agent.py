@@ -50,21 +50,45 @@ class OpenAIWarpper:
         answer = response.choices[0].message.content
         return answer
 
-class QwenWrapper:
-    def __init__(self, model_name='Qwen3-8B', max_new_tokens=4096):
-        # TODO
-        self.model = model_name
-        self.max_new_tokens = max_new_tokens
-    
-    def call(self, system_prompt, user_prompt) -> str:
-        # TODO
-        return "This is a test response from QwenWrapper"
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+# class QwenWrapper:
+#     def __init__(self, model_name='Qwen/Qwen3-8B', max_new_tokens=4096):
+#         self.model = AutoModelForCausalLM.from_pretrained(
+#             model_name,
+#             torch_dtype=torch.bfloat16,
+#             device_map="auto"
+#         )
+#         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+#         self.max_new_tokens = max_new_tokens
+
+#     def call(self, system_prompt, user_prompt) -> str:
+#         messages = [
+#             {"role": "system", "content": system_prompt},
+#             {"role": "user", "content": user_prompt},
+#         ]
+
+#         input_text = self.tokenizer.apply_chat_template(
+#             messages, tokenize=False, add_generation_prompt=True
+#         )
+
+#         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
+
+#         outputs = self.model.generate(
+#             **inputs,
+#             max_new_tokens=self.max_new_tokens,
+#             do_sample=False
+#         )
+
+#         answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+#         return answer
 
 class ReActAgent:
     def __init__(
         self,
         tools: List[str],
-        llm_engine = QwenWrapper(),
+        llm_engine,
         mode: str = 'structure',
         direct_system_prompt = DIRECT_SYSTEM_PROMPT,
         max_iterations: int = 6,
@@ -104,10 +128,10 @@ class ReActAgent:
     def convert2table_llm(self, table):
         respond = self.llm_engine.call(system_prompt=TABLE_PARSING_PROMPT, user_prompt=table)
         if 'dataframe' in respond:
-            return parse_table2df(table)
+            return 'dataframe', parse_table2df(table)
         else:
             json_full = json.loads(respond)
-            return json_full['data']
+            return 'json', json_full['data']
 
     def tool_parsed(self, respond: str):
         # Parse tool name
@@ -206,10 +230,14 @@ class AnalysisAgent(ReActAgent):
 
     def run(self, table:str, query: str) -> str:
         self._log(f"[AnalysisAgent] 开始处理查询: {query[:50]}...")
-        self.table = self.convert2table_llm(table)
+        self.table_type, self.table = self.convert2table_llm(table)
+        self._log(f"[AnalysisAgent] 表类型: {self.table_type}")
         # self.table_info = self.convert_table2str(table) # TODO
         self.history.append(
             "Table: " + table # TODO, 可以改成table_info试试
+        )
+        self.history.append(
+            "Table Type: " + self.table_type
         )
         for i in range(self.max_iterations):
             self._log(f"[AnalysisAgent] 迭代 {i+1}/{self.max_iterations}")
