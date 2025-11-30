@@ -164,14 +164,26 @@ def _parse_html_table(html_content: str) -> Dict[str, Any]:
             max_row = max(max_row, row_idx + rowspan)
             max_col = max(max_col, col_idx + colspan)
             col_idx += colspan
-    
+
+    merged_cells = []
+    for cell in cells:
+        rowspan = cell.get("rowspan", 1)
+        colspan = cell.get("colspan", 1)
+        if rowspan > 1 or colspan > 1:
+            merged_cells.append({
+                "left_top": [cell["row"] + 1, cell["col"] + 1],
+                "right_bottom": [cell["row"] + rowspan,
+                                 cell["col"] + colspan],
+                "value": cell["value"]
+            })
+
     return {
         "n_rows": max_row,
         "n_cols": max_col,
         "cells": cells,
-        "grid": {f"{k[0]},{k[1]}": v for k, v in grid.items()}
+        "grid": {f"{k[0]},{k[1]}": v for k, v in grid.items()},
+        "merged_cells": merged_cells
     }
-
 
 def _parse_markdown_table(md_content: str) -> Dict[str, Any]:
     """Parse markdown table."""
@@ -244,24 +256,17 @@ def _parse_plain_table(content: str) -> Dict[str, Any]:
 
 def detect_merged_cells(table_structure: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Detect and return all merged cells from parsed table structure.
-    
-    Returns:
-        List of merged cells with their ranges and content
+    Detect merged cells (rowspan/colspan > 1) and output in required format:
+    [
+        {
+            "left_top": [row, col],       # 1-based index
+            "right_bottom": [row, col],   # 1-based index
+            "cell_value": "xxx"
+        }
+    ]
+    If no merged cells, return "未找到合并单元格".
     """
-    merged = []
-    for cell in table_structure.get("cells", []):
-        if cell.get("rowspan", 1) > 1 or cell.get("colspan", 1) > 1:
-            merged.append({
-                "start_row": cell["row"],
-                "start_col": cell["col"],
-                "end_row": cell["row"] + cell.get("rowspan", 1) - 1,
-                "end_col": cell["col"] + cell.get("colspan", 1) - 1,
-                "value": cell["value"],
-                "rowspan": cell.get("rowspan", 1),
-                "colspan": cell.get("colspan", 1)
-            })
-    return merged
+    return table_structure.get("merged_cells", [])
 
 
 def table_size_detector(table_structure: Dict[str, Any]) -> Dict[str, Any]:
@@ -342,59 +347,16 @@ def get_json_value(json_tree: Dict[str, Any],
         except:
             return result
     return result
-
-
-def count_rows_with_condition(df: pd.DataFrame, 
-                              column_pattern: str,
-                              condition: str = "not_empty") -> int:
-    """
-    Count rows matching a condition in specified column(s).
-    
-    Args:
-        df: pandas DataFrame
-        column_pattern: Pattern to match column names
-        condition: "not_empty", "has_value", "numeric"
-    
-    Returns:
-        Count of matching rows
-    """
-    # Find matching columns
-    matching_cols = [c for c in df.columns if column_pattern in c]
-    
-    if not matching_cols:
-        return 0
-    
-    count = 0
-    # Skip the last row if it's a total/合计 row
-    check_df = df.copy()
-    first_col = df.columns[0]
-    if check_df[first_col].iloc[-1] in ['合计', '总计', 'Total', 'Sum']:
-        check_df = check_df.iloc[:-1]
-    
-    for idx, row in check_df.iterrows():
-        for col in matching_cols:
-            val = str(row[col]).strip()
-            if condition == "not_empty":
-                if val and val != '-' and val != '':
-                    count += 1
-                    break
-            elif condition == "has_value":
-                if val and val != '-' and val != '' and val != '0':
-                    count += 1
-                    break
-            elif condition == "numeric":
-                # Check if it's a valid number
-                clean_val = val.replace(',', '').replace(' ', '')
-                try:
-                    float(clean_val)
-                    if float(clean_val) != 0:
-                        count += 1
-                        break
-                except:
-                    pass
-    
-    return count
-
+ 
+def query_table_sql(df, q):
+    import duckdb
+    try:
+        con = duckdb.connect()
+        con.register("df", df)      
+        res = con.execute(q).df()  
+        return res.to_dict('records')
+    except Exception as e:
+        return {"error": str(e), "query": q}
 
 def get_column_values(df: pd.DataFrame, column_pattern: str) -> List[Dict[str, str]]:
     """
@@ -430,12 +392,12 @@ TOOL_REGISTRY = {
     # Structure Understanding Tools
     "detect_merged_cells": {
         "func": detect_merged_cells,
-        "description": "Detect all merged cells in a parsed table structure",
+        "description": "Detect all merged cells in a parsed table structure, and output in the format of [left_top, right_bottom, cell_value]",
         "params": []
     },
     "table_size_detector": {
         "func": table_size_detector,
-        "description": "Get table dimensions and valid data region bounding box",
+        "description": "Get table dimensions and valid data region bounding box, output in the format of {n_rows, n_cols, bounding_box, total_cells}",
         "params": []
     },
     # Analysis Tools
@@ -449,10 +411,10 @@ TOOL_REGISTRY = {
         "description": "Get value from JSON tree by row key and column key",
         "params": ["row_key", "col_key"]
     },
-    "count_rows_with_condition": {
-        "func": count_rows_with_condition,
-        "description": "Count rows matching condition in specified column(s)",
-        "params": ["column_pattern", "condition"]
+    "query_table_sql": {
+        "func": query_table_sql,
+                "description": "在 DataFrame 上执行原生 SQL 查询， table名为df。传入一个 SQL 片段或完整查询。例如：'WHERE 营业收入 > 100'，或 'SELECT * FROM df WHERE 利润率 < 0.2'。DataFrame 在 SQL 中的名称固定为 df，可直接使用 df 进行查询。支持 WHERE、AND/OR、SELECT、ORDER BY、GROUP BY 等，输出为字典列表。",
+        "params": ["query"]
     },
     "get_column_values": {
         "func": get_column_values,

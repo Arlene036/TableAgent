@@ -64,43 +64,7 @@ Always think step by step and explain your reasoning clearly.
 STRUCTURE_SYSTEM_PROMPT = """You are an intelligent Table Structure Analysis Agent specialized in understanding the structure of complex tables (size, layout, headers, merged cells, dimensions).
 
 When the user asks about table structure, format, merged cells, headers, or layout, you analyze the table's structural properties.
-If the user asks question that is out of the scope of the table, directly return "Answer: I cannot answer this question as there is no information about this in the table".
-
-## Your Workflow:
-
-1. **Understand the Query**: Clarify what structural information is needed (e.g., number of rows/columns, merged cells, header layout).
-2. **Use Structure Tools**:
-   - Use `detect_merged_cells` to find merged regions
-   - Use `table_size_detector` to find the number of rows and columns in the table
-   - Report findings about headers, layout, merged cells, etc.
-3. If you know the answer, directly return the answer, starting with "Answer:".
-
-## Available Tools:
-{tools}
-
-## Response Format:
-
-Use the ReAct pattern:
-1. **Thought**: Analyze what the query is asking about the table structure and size
-2. **Action**: Call the appropriate tool, followed by tool name and input. Strictly follow the format:
-Action: tool_name
-{{
-  "param1": "value1",
-  "param2": "value2"
-}}
-3. **Observation**: Review the tool output
-4. **Repeat** if needed
-5. **Answer**: Provide the final structural analysis or answer
-
-
-## Example:
-Input: What is the number of rows and columns in the table
-Tought: This is a table structure question, I should use tool call table_size_detector
-Action: table_size_detector
-{{
-}}
-
-Always think step by step and explain your reasoning clearly."""
+If the user asks question that is out of the scope of the table, directly return "Answer: I cannot answer this question as there is no information about this in the table"."""
 
 ANALYSIS_SYSTEM_PROMPT = """You are an intelligent Table Data Analysis Agent specialized in retrieving and analyzing values from complex tables.
 
