@@ -14,7 +14,7 @@ from tools import (
     detect_merged_cells,
     table_size_detector,
     get_cell_value,
-    count_rows_with_condition,
+    query_table_sql,
     get_column_values,
     TOOL_REGISTRY,
     execute_tool
@@ -156,8 +156,8 @@ class ReActAgent:
 class StructureAgent(ReActAgent):
     def __init__(self, llm_engine, verbose=True, mode: str = 'structure'):
         tools = [
-            "detect_merged_cells",
-            "table_size_detector",
+            # "detect_merged_cells",
+            # "table_size_detector",
         ]
         super().__init__(
             tools=tools,
@@ -171,34 +171,20 @@ class StructureAgent(ReActAgent):
         self.table_structure = parse_table_structure(table)
         # self.table_info = self.convert_table2str(table) # TODO
         self.history.append(
-            "Table: " + table # TODO, 可以改成table_info试试
+            "Table: " + table # TODO, 可以改成table_info试试,
         )
-        for i in range(self.max_iterations):
-            self._log(f"[StructureAgent] 迭代 {i+1}/{self.max_iterations}")
-            if i == 0:
-                self.history.append(
-                    "User: " + query
-                )
-            respond = self.llm_engine.call(system_prompt=self.react_system_prompt, user_prompt='\n'.join(self.history))
-            if 'Answer:' in respond:
-                self._log(f"[StructureAgent] 找到答案")
-                return respond.split('Answer:')[-1]
-            if 'Action:' in respond:
-                self.history.append(
-                    "Action: " + respond.split('Action:')[-1]
-                )
-                tool_name, kwargs = self.tool_parsed(respond)
-                self._log(f"[StructureAgent] 执行工具: {tool_name}")
-                tool_return = execute_tool(tool_name, self.table_structure, **kwargs)
-                self.history.append(
-                    "Observation: " + str(tool_return)
-                )
-                self._log(f"[StructureAgent] 工具名称: {tool_name}")
-                self._log(f"[StructureAgent] 工具参数: {kwargs}")
-                self._log(f"[StructureAgent] 工具返回: {tool_return}")
-        # if outreach max_iterations
-        self._log(f"[StructureAgent] 达到最大迭代次数")
-        respond = self.llm_engine.call(system_prompt=self.direct_system_prompt, user_prompt='\n'.join(self.history))
+        self.history.append(
+            "Table Size: " + str(self.table_structure['n_rows']) + " rows, " + str(self.table_structure['n_cols']) + " cols"
+        )
+        self.history.append(
+            "Table Merged Cells: " + str(self.table_structure['merged_cells'])
+        )
+        respond = self.llm_engine.call(system_prompt=self.react_system_prompt, user_prompt='\n'.join(self.history))
+        if 'Answer:' in respond:
+            self._log(f"[StructureAgent] 找到答案")
+            return respond.split('Answer:')[-1]
+        else:
+            respond = self.llm_engine.call(system_prompt=self.direct_system_prompt, user_prompt='\n'.join(self.history))
         return respond
 
 class AnalysisAgent(ReActAgent):
@@ -208,7 +194,7 @@ class AnalysisAgent(ReActAgent):
             # "parse_to_json_tree",
             "get_cell_value",
             "get_json_value",
-            "count_rows_with_condition",
+            "query_table_sql",
             "get_column_values",
         ]
         super().__init__(
