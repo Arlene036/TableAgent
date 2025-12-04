@@ -6,8 +6,6 @@ Main agent class that orchestrates table structure understanding and data analys
 import json
 import re
 from typing import Dict, Any, List, Optional, Tuple
-import os
-import openai
 from tools import (
     parse_table2df,
     parse_table_structure,
@@ -20,7 +18,6 @@ from tools import (
     execute_tool
 )
 from prompts import (
-    MAIN_SYSTEM_PROMPT,
     STRUCTURE_SYSTEM_PROMPT,
     ANALYSIS_SYSTEM_PROMPT,
     DIRECT_SYSTEM_PROMPT,
@@ -29,60 +26,37 @@ from prompts import (
     GENERAL_SYSTEM_PROMPT
 )
 
-os.environ['OPENAI_API_KEY'] = 'YOUR_OPENAI_API_KEY'
 
-class OpenAIWarpper:
-    def __init__(self, model_name = 'gpt-4.1-mini', token = ""):
-        self.client = openai.OpenAI(
-                        api_key=os.environ['OPENAI_API_KEY'],
-                        base_url="https://ai-gateway.andrew.cmu.edu/"
-                    )
-        self.model = model_name
-    
-    def call(self,system_prompt,user_prompt):
-        response = self.client.chat.completions.create(
-                model= self.model,
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user","content": user_prompt}
-                ]
+class QwenWrapper:
+    def __init__(self, model_name='Qwen/Qwen3-8B', max_new_tokens=4096):
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto"
         )
-        answer = response.choices[0].message.content
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.max_new_tokens = max_new_tokens
+
+    def call(self, system_prompt, user_prompt) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        input_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
+
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False
+        )
+
+        answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return answer
-
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
-# class QwenWrapper:
-#     def __init__(self, model_name='Qwen/Qwen3-8B', max_new_tokens=4096):
-#         self.model = AutoModelForCausalLM.from_pretrained(
-#             model_name,
-#             torch_dtype=torch.bfloat16,
-#             device_map="auto"
-#         )
-#         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-#         self.max_new_tokens = max_new_tokens
-
-#     def call(self, system_prompt, user_prompt) -> str:
-#         messages = [
-#             {"role": "system", "content": system_prompt},
-#             {"role": "user", "content": user_prompt},
-#         ]
-
-#         input_text = self.tokenizer.apply_chat_template(
-#             messages, tokenize=False, add_generation_prompt=True
-#         )
-
-#         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
-
-#         outputs = self.model.generate(
-#             **inputs,
-#             max_new_tokens=self.max_new_tokens,
-#             do_sample=False
-#         )
-
-#         answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-#         return answer
 
 class ReActAgent:
     def __init__(
@@ -130,18 +104,19 @@ class ReActAgent:
         if 'dataframe' in respond:
             return 'dataframe', parse_table2df(table)
         else:
-            json_full = json.loads(respond)
-            return 'json', json_full['data']
+            try:
+                json_full = json.loads(respond)
+                return 'json', json_full['data']
+            except:
+                return 'dataframe', parse_table2df(table)
 
     def tool_parsed(self, respond: str):
-        # Parse tool name
         try:
             action_line = re.search(r"Action\s*:\s*([a-zA-Z0-9_]+)", respond)
             tool_name = action_line.group(1).strip()
         except:
             raise ValueError(f"❌ Cannot parse tool name from respond: {respond}")
 
-        # Try parsing the standard "Action Input: { ... }"
         kwargs = None
         match = re.search(r"Action Input\s*:\s*(\{.*?\})", respond, re.S)
         if match:
@@ -150,9 +125,7 @@ class ReActAgent:
             except:
                 kwargs = None
 
-        # If still None, try parsing a bare `{ ... }` block after the action line
         if kwargs is None:
-            # Find the first JSON block
             match = re.search(r"Action\s*:.*?(\{.*?\})", respond, re.S)
             if match:
                 try:
@@ -160,21 +133,11 @@ class ReActAgent:
                 except:
                     kwargs = {}
 
-        # Final fallback
         if kwargs is None:
             kwargs = {}
 
-        print(">>> tool_parsed INPUT>>>")
-        print(respond)
-        print(">>> tool_parsed OUTPUT>>>")
-        print(tool_name)
-        print(kwargs)
         return tool_name, kwargs
     
-    def convert_table2str(self, input):
-        # TODO
-        return table_info
-
     
 
 class StructureAgent(ReActAgent):
@@ -193,7 +156,6 @@ class StructureAgent(ReActAgent):
     def run(self, table:str, query: str) -> str:
         self._log(f"[StructureAgent] 开始处理查询: {query[:50]}...")
         self.table_structure = parse_table_structure(table)
-        # self.table_info = self.convert_table2str(table) # TODO
         self.history.append(
             "Table: " + table # TODO, 可以改成table_info试试,
         )
@@ -204,12 +166,10 @@ class StructureAgent(ReActAgent):
             "Table Merged Cells: " + str(self.table_structure['merged_cells'])
         )
         respond = self.llm_engine.call(system_prompt=self.react_system_prompt, user_prompt='\n'.join(self.history))
-        if 'Answer:' in respond:
-            self._log(f"[StructureAgent] 找到答案")
-            return respond.split('Answer:')[-1]
-        else:
-            respond = self.llm_engine.call(system_prompt=self.direct_system_prompt, user_prompt='\n'.join(self.history))
-        return respond
+        self._log(f"[StructureAgent] 找到答案")
+        print(">>> StructureAgent Answer >>>")
+        print(respond.split('Answer:')[-1])
+        return respond.split('Answer:')[-1]
 
 class AnalysisAgent(ReActAgent):
     def __init__(self, llm_engine, verbose=True, mode: str = 'analysis'):
@@ -219,7 +179,7 @@ class AnalysisAgent(ReActAgent):
             "get_cell_value",
             "get_json_value",
             "query_table_sql",
-            "get_column_values",
+            # "get_column_values",
         ]
         super().__init__(
             tools=tools,
@@ -232,7 +192,6 @@ class AnalysisAgent(ReActAgent):
         self._log(f"[AnalysisAgent] 开始处理查询: {query[:50]}...")
         self.table_type, self.table = self.convert2table_llm(table)
         self._log(f"[AnalysisAgent] 表类型: {self.table_type}")
-        # self.table_info = self.convert_table2str(table) # TODO
         self.history.append(
             "Table: " + table # TODO, 可以改成table_info试试
         )
@@ -269,12 +228,9 @@ class AnalysisAgent(ReActAgent):
     
 
 class TableAnalysisAgent:
-    def __init__(self, llm_type: str = "qwen", verbose: bool = True):
+    def __init__(self, verbose: bool = True):
         self.verbose = verbose
-        if llm_type == 'qwen':
-            self.llm = QwenWrapper()
-        else:
-            self.llm = OpenAIWarpper()
+        self.llm = QwenWrapper()
         
     def _log(self, message: str):
         if self.verbose:
@@ -307,5 +263,5 @@ class TableAnalysisAgent:
         return results
 
 
-def create_agent(llm_type: str = 'qwen', verbose: bool = True) -> TableAnalysisAgent:
-    return TableAnalysisAgent(llm_type=llm_type, verbose=verbose)
+def create_agent(verbose: bool = True) -> TableAnalysisAgent:
+    return TableAnalysisAgent(verbose=verbose)
